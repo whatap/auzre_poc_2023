@@ -1,0 +1,117 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whatap-virtual-startup
+data:
+  virtual_startup.sh: |
+    #!/usr/bin/env sh
+
+    VIRTUAL_HOME=/data/agent/virtual
+    VIRTUAL_JAR=`ls ${VIRTUAL_HOME}/whatap-virtual-*.jar | sort | tail -1`
+    WHATAP_HOME=/whatap
+    WHATAP_JAR=`ls ${WHATAP_HOME}/whatap.agent*.jar | sort | tail -1`
+    export JAVA_OPTS="-javaagent:${WHATAP_JAR}  -Dwhatap.micro.enabled=true "
+    export JAVA_OPTS=" $JAVA_OPTS -Dwhatap.port=8074 -Duser.timezone=Asia/Seoul -Dfile.encoding=utf-8 "
+    export JAVA_OPTS=" $JAVA_OPTS -cp ${VIRTUAL_JAR} "
+
+    java   $JAVA_OPTS  com.virtual.App
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whatap-apm-init
+data:
+  apm_init.sh: |-
+    #!/usr/bin/env sh
+
+    cp /data/agent/micro/whatap.agent.kube.jar /whatap
+    /data/agent/tools/whatap_config_helper -confbaseId dev_agent_config -out /whatap agentConfig
+    echo "profile_basetime=0" >> /whatap/whatap.conf
+    echo "tx_caller_meter_enabled=true" >> /whatap/whatap.conf
+    echo "sql_dbc_meter_enabled=true" >> /whatap/whatap.conf
+    echo "httpc_host_meter_enabled" >> /whatap/whatap.conf
+    echo "actx_meter_enabled=true" >> /whatap/whatap.conf
+    echo "hooklog_enabled=true" >> /whatap/whatap.conf
+    echo "logsink_enabled=true" >> /whatap/whatap.conf
+    echo "logsink_zip_enabled=true" >> /whatap/whatap.conf
+    echo "logsink_trace_enabled=true" >> /whatap/whatap.conf  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whatap-virtual-david-oberg
+  labels:
+    app: whatap-virtual-david-oberg
+    version: 1.0.0
+spec:
+  # modify replicas according to your case
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whatap-virtual-david-oberg
+  template:
+    metadata:
+      name: whatap-virtual-david-oberg
+      labels:
+        name: whatap-virtual-david-oberg
+        app: whatap-virtual-david-oberg
+    spec:
+      initContainers:
+        - name: copy
+          image: whatap/kube_mon
+          command: ["/bin/apm_init.sh"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          volumeMounts:
+            - name: whatap-lib-volume
+              mountPath: /whatap
+            - name: whatap-apm-init
+              mountPath: /bin/apm_init.sh
+              readOnly: true
+              subPath: apm_init.sh
+      containers:
+        - name: whatap-virtual-david-oberg
+          image: registry.whatap.io:5000/whatap_dev:10110
+          resources:
+            requests:
+              memory: 3Gi
+              cpu: 100m
+            limits:
+              memory: 3Gi
+              cpu: 400m
+
+          ports:
+            - name: web
+              containerPort: 80
+          command: ['/bin/virtual_startup.sh']
+          #command: ['sleep', '5d']
+          env:
+            - name: NODE_IP
+              valueFrom: {fieldRef: {fieldPath: status.hostIP}}
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: WHATAP_HOME
+              value: "/whatap"
+          volumeMounts:
+            - name: whatap-virtual-startup
+              mountPath: /bin/virtual_startup.sh
+              readOnly: true
+              subPath: virtual_startup.sh
+            - name: whatap-lib-volume
+              mountPath: /whatap
+      volumes:
+        - name: whatap-virtual-startup
+          configMap:
+            defaultMode: 0700
+            name: whatap-virtual-startup
+        - name: whatap-lib-volume
+          emptyDir: {}
+        - name: whatap-apm-init
+          configMap:
+            defaultMode: 0700
+            name: whatap-apm-init
+
